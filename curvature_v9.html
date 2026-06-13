@@ -1,0 +1,682 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Curvature Extractor & Reconstructor</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root { --bg:#f7f7f8; --panel:#fff; --accent:#0b84ff; --muted:#666; --border:#e5e5e5; }
+  body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial; background:var(--bg); margin:18px; color:#111; }
+  h2 { margin:0 0 15px 0; font-weight:700; }
+  h3 { margin:0 0 10px 0; font-weight:600; font-size:16px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+  .row { display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; }
+  .col { display:flex; flex-direction:column; gap:16px; flex:1; min-width:400px; }
+  .panel { background:var(--panel); border-radius:10px; padding:16px; box-shadow:0 6px 18px rgba(20,20,40,0.06); }
+  .canvas-container { position:relative; display:inline-block; max-width:100%; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: #eee;}
+  canvas { display:block; max-width:100%; height:auto; }
+  #drawCanvas { position:absolute; left:0; top:0; touch-action:none; }
+  
+  .controls-row { display:flex; gap:8px; flex-wrap:wrap; margin-bottom: 12px; }
+  button { background:var(--accent); color:#fff; border:0; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight: 500; transition: opacity 0.2s; }
+  button:hover { opacity: 0.9; }
+  button.secondary { background:#e5e7eb; color:#111; }
+  button.success { background:#00c853; color:#fff; }
+  
+  label { display:inline-flex; gap:8px; align-items:center; font-size: 14px; }
+  input[type="range"] { width:120px; }
+  input[type="number"] { width: 70px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; }
+  input[type="file"] { font-size: 14px; }
+  
+  .small { font-size:13px; color:var(--muted); line-height: 1.4; }
+  pre { background:#0f1720; color:#dbeafe; padding:12px; border-radius:8px; overflow:auto; max-height:250px; font-size: 13px; }
+  .controls-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px; align-items:center; }
+  
+  #equationsBox { display: none; background: #fafafa; border: 1px solid var(--border); padding: 12px; border-radius: 8px; margin-top: 10px; max-height: 300px; overflow-y: auto; }
+  .eq-segment { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #ccc; }
+  .eq-segment:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+  .eq-math { font-family: "Courier New", Courier, monospace; font-size: 14px; color: #b91c1c; margin: 4px 0; }
+</style>
+</head>
+<body>
+  <h2>Curvature Extractor & Piecewise Reconstructor</h2>
+
+  <div class="row">
+    <div class="col">
+      <div class="panel">
+        <h3>1. Extraction & Parsing Workspace</h3>
+        <div class="controls-row">
+          <input id="file" type="file" accept="image/*">
+          <button id="clearBtn" class="secondary">Clear</button>
+          <button id="undoBtn" class="secondary">Undo Stroke</button>
+          <button id="closePolyBtn" class="secondary">Close Poly</button>
+        </div>
+
+        <div class="canvas-container">
+          <canvas id="imgCanvas" width="800" height="600"></canvas>
+          <canvas id="drawCanvas" width="800" height="600"></canvas>
+        </div>
+
+        <div class="small" id="info" style="margin-top: 10px; font-weight: bold; color: var(--accent);">Waiting for OpenCV...</div>
+        <div class="small" style="margin-top: 5px;">Draw freehand strokes to create a polygon. Click 'Close Poly' then 'Run Curvature Extractor'.</div>
+
+        <hr style="border:0; border-top:1px solid var(--border); margin: 15px 0;">
+
+        <div class="controls-grid">
+          <div><label>Canny low <input id="cannyLow" type="range" min="10" max="150" value="50"></label> <span class="small" id="cannyLowVal"></span></div>
+          <div><label>Canny high <input id="cannyHigh" type="range" min="60" max="300" value="150"></label> <span class="small" id="cannyHighVal"></span></div>
+          <div><label>Normal radius <input id="normalRadius" type="range" min="1" max="8" value="4"></label> <span class="small" id="normalRadiusVal"></span></div>
+          <div><label>Split sensit. <input id="splitSens" type="range" min="1" max="300" value="150"></label> <span class="small" id="splitSensVal"></span></div>
+          <div><label>Poly degree <input id="polyDeg" type="range" min="2" max="6" value="3"></label> <span class="small" id="polyDegVal"></span></div>
+          <div><label>Sample step <input id="sampleStep" type="range" min="0.5" max="6" step="0.5" value="1"></label> <span class="small" id="sampleStepVal"></span></div>
+        </div>
+
+        <div class="controls-row" style="margin-top: 15px;">
+          <button id="curvatureBtn" class="success">Run Curvature Extractor</button>
+          <button id="exportJsonBtn" class="secondary">Export JSON</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="panel">
+        <h3>2. Piecewise Reconstruction</h3>
+        <div class="controls-row">
+          <label>Samples/Seg: <input id="samples" type="number" min="10" max="2000" value="200"></label>
+          <label>Stroke (px): <input id="strokeW" type="number" min="0.5" max="10" step="0.5" value="2"></label>
+          <label><input id="doFill" type="checkbox"> Fill Shape</label>
+          <label><input id="showIds" type="checkbox" checked> Show IDs</label>
+        </div>
+
+        <div class="canvas-container">
+          <canvas id="outCanvas" width="800" height="600"></canvas>
+        </div>
+        
+        <div class="controls-row" style="margin-top: 15px;">
+          <button id="showEqBtn">Show Generated Equations</button>
+          <button id="exportPngBtn" class="secondary">Export PNG</button>
+        </div>
+
+        <div id="equationsBox">
+          <div style="font-weight: 600; margin-bottom: 8px;">Polynomial Representations:</div>
+          <div id="equationsContent" class="small">Run curvature extractor first to generate equations.</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Raw JSON Preview</h3>
+        <pre id="jsonPreview">No results yet. Run extraction first.</pre>
+      </div>
+    </div>
+  </div>
+
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
+
+<script>
+/* =========================
+   UI & Setup Logic
+   ========================= */
+const $ = id => document.getElementById(id);
+
+let imgCanvas = $('imgCanvas'), drawCanvas = $('drawCanvas'), outCanvas = $('outCanvas');
+let ic = imgCanvas.getContext('2d', {willReadFrequently: true}), dc = drawCanvas.getContext('2d'), oc = outCanvas.getContext('2d');
+
+let cvReady = false;
+function onOpenCvReady(){ 
+  cvReady = true; 
+  console.log('OpenCV ready'); 
+  $('info').innerText = 'OpenCV loaded. Ready to process images.'; 
+}
+
+const bindRange = (el, out, suffix='')=>{
+  out.innerText = el.value + suffix;
+  el.addEventListener('input', ()=> out.innerText = el.value + suffix);
+};
+bindRange($('cannyLow'), $('cannyLowVal'));
+bindRange($('cannyHigh'), $('cannyHighVal'));
+bindRange($('normalRadius'), $('normalRadiusVal'),'px');
+bindRange($('splitSens'), $('splitSensVal'),'%');
+bindRange($('polyDeg'), $('polyDegVal'));
+bindRange($('sampleStep'), $('sampleStepVal'),'px');
+
+let img = new Image();
+$('file').addEventListener('change', e=>{
+  let f = e.target.files[0]; if(!f) return;
+  let url = URL.createObjectURL(f);
+  img.onload = ()=>{ 
+    imgCanvas.width = img.width; imgCanvas.height = img.height;
+    drawCanvas.width = img.width; drawCanvas.height = img.height;
+    outCanvas.width = img.width; outCanvas.height = img.height;
+    ic.drawImage(img,0,0); 
+    dc.clearRect(0,0,drawCanvas.width,drawCanvas.height); 
+    oc.clearRect(0,0,outCanvas.width,outCanvas.height);
+    strokes=[]; polygonClosed=false; window.latestResults=null;
+    $('jsonPreview').innerText = "No results yet.";
+    $('equationsBox').style.display = "none";
+    redrawAll(); 
+  };
+  img.src = url;
+});
+
+/* =========================
+   Drawing & Polygon Logic
+   ========================= */
+let strokes = []; 
+let currentStroke = null;
+let drawing = false;
+let polygonClosed = false;
+
+drawCanvas.addEventListener('pointerdown', e=>{
+  if(polygonClosed) return;
+  drawing = true; currentStroke = [];
+  const r = drawCanvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) * (drawCanvas.width / r.width);
+  const y = (e.clientY - r.top) * (drawCanvas.height / r.height);
+  currentStroke.push([x,y]);
+  redrawAll();
+});
+drawCanvas.addEventListener('pointermove', e=>{
+  if(!drawing || polygonClosed) return;
+  const r = drawCanvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) * (drawCanvas.width / r.width);
+  const y = (e.clientY - r.top) * (drawCanvas.height / r.height);
+  currentStroke.push([x,y]);
+  redrawAll();
+});
+drawCanvas.addEventListener('pointerup', e=>{
+  if(!drawing) return;
+  drawing = false;
+  if(currentStroke && currentStroke.length>1) strokes.push(currentStroke);
+  currentStroke = null;
+  redrawAll();
+});
+
+$('undoBtn').addEventListener('click', ()=>{
+  if(strokes.length>0) strokes.pop();
+  polygonClosed = false; redrawAll();
+});
+$('clearBtn').addEventListener('click', ()=>{
+  strokes=[]; polygonClosed=false; window.latestResults=null; 
+  oc.clearRect(0,0,outCanvas.width,outCanvas.height);
+  redrawAll();
+});
+$('closePolyBtn').addEventListener('click', ()=>{
+  if(strokes.length>0) { polygonClosed = true; redrawAll(); }
+});
+
+function redrawAll(){
+  ic.drawImage(img,0,0,imgCanvas.width,imgCanvas.height);
+  dc.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+  dc.lineWidth = 2; dc.strokeStyle = 'rgba(255,0,0,0.95)'; dc.fillStyle = 'rgba(255,0,0,0.06)';
+  
+  for(let s of strokes){
+    dc.beginPath(); dc.moveTo(s[0][0], s[0][1]);
+    for(let i=1;i<s.length;i++) dc.lineTo(s[i][0], s[i][1]);
+    dc.stroke();
+  }
+  if(currentStroke){
+    dc.beginPath(); dc.moveTo(currentStroke[0][0], currentStroke[0][1]);
+    for(let i=1;i<currentStroke.length;i++) dc.lineTo(currentStroke[i][0], currentStroke[i][1]);
+    dc.stroke();
+  }
+  if(polygonClosed && strokes.length>0){
+    let poly = flattenStrokes(strokes);
+    dc.beginPath(); dc.moveTo(poly[0][0], poly[0][1]);
+    for(let i=1;i<poly.length;i++) dc.lineTo(poly[i][0], poly[i][1]);
+    dc.closePath(); dc.fill(); dc.stroke();
+  }
+}
+
+function flattenStrokes(sts){
+  let out = [];
+  for(let s of sts) for(let p of s) out.push(p);
+  return out;
+}
+
+/* =========================
+   Curvature Extraction & Math
+   ========================= */
+$('curvatureBtn').addEventListener('click', async ()=>{
+  if(!cvReady){ alert('OpenCV not loaded yet'); return; }
+  if(!polygonClosed){ alert('Close polygon first.'); return; }
+  $('info').innerText = 'Processing...';
+  await new Promise(r=>setTimeout(r,50)); 
+
+  let poly = flattenStrokes(strokes);
+  if(poly.length < 6){ alert('Polygon too small.'); $('info').innerText='Error'; return; }
+
+  let maskCanvas = document.createElement('canvas'); 
+  maskCanvas.width = imgCanvas.width; maskCanvas.height = imgCanvas.height;
+  let mctx = maskCanvas.getContext('2d', {willReadFrequently: true});
+  mctx.fillStyle = 'black'; mctx.fillRect(0,0,maskCanvas.width,maskCanvas.height);
+  mctx.beginPath(); mctx.moveTo(poly[0][0], poly[0][1]);
+  for(let i=1;i<poly.length;i++) mctx.lineTo(poly[i][0], poly[i][1]);
+  mctx.closePath(); mctx.fillStyle = 'white'; mctx.fill();
+
+  let src = cv.imread(imgCanvas);
+  let gray = new cv.Mat(); cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+
+  let blur = new cv.Mat();
+  cv.bilateralFilter(gray, blur, 9, 75, 75, cv.BORDER_DEFAULT);
+
+  let edges = new cv.Mat();
+  cv.Canny(blur, edges, parseInt($('cannyLow').value), parseInt($('cannyHigh').value));
+  
+  let maskMat = cv.imread(maskCanvas);
+  let maskGray = new cv.Mat(); cv.cvtColor(maskMat, maskGray, cv.COLOR_RGBA2GRAY, 0);
+  let maskedEdges = new cv.Mat();
+  cv.bitwise_and(edges, maskGray, maskedEdges);
+
+  let kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3,3));
+  cv.morphologyEx(maskedEdges, maskedEdges, cv.MORPH_CLOSE, kernel);
+
+  let contours = new cv.MatVector(), hierarchy = new cv.Mat();
+  cv.findContours(maskedEdges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_NONE);
+
+  let results = { segments: [] };
+
+  dc.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+  dc.fillStyle='rgba(255,0,0,0.06)'; dc.strokeStyle='rgba(255,0,0,0.9)'; dc.lineWidth=2;
+  dc.beginPath(); dc.moveTo(poly[0][0], poly[0][1]);
+  for(let i=1;i<poly.length;i++) dc.lineTo(poly[i][0], poly[i][1]);
+  dc.closePath(); dc.fill(); dc.stroke();
+
+  for(let i=0;i<contours.size();i++){
+    let cnt = contours.get(i);
+    if(cnt.rows < 10){ cnt.delete(); continue; }
+    
+    let pts = [];
+    for(let r=0;r<cnt.rows;r++) pts.push([cnt.intPtr(r,0)[0], cnt.intPtr(r,0)[1]]);
+
+    let step = parseFloat($('sampleStep').value);
+    let sampled = resampleContour(pts, step);
+    let refined = subpixelRefine(sampled, blur, parseInt($('normalRadius').value));
+    let curvature = computeCurvature(refined);
+    let smoothK = smoothArray(curvature, 7);
+    let segments = splitByCurvatureAdaptive(refined, smoothK, parseFloat($('splitSens').value)/100.0);
+
+    for(let seg of segments){
+      if(seg.length < 6) continue;
+      let deg = parseInt($('polyDeg').value);
+      let fit = fitParametricPolynomial(seg, deg);
+      let arc = arcLengthSamples(seg);
+      
+      results.segments.push({
+        id: results.segments.length+1,
+        pointsCount: seg.length,
+        polyDegree: deg,
+        coeffsX: fit.coeffsX,
+        coeffsY: fit.coeffsY,
+        arcSamples: arc
+      });
+      drawFittedCurve(fit, seg, '#00c853', 2, dc);
+      annotatePoint(seg[Math.floor(seg.length/3)], results.segments.length, dc);
+    }
+    cnt.delete();
+  }
+
+  src.delete(); gray.delete(); blur.delete(); edges.delete(); maskMat.delete(); maskGray.delete();
+  maskedEdges.delete(); contours.delete(); hierarchy.delete(); kernel.delete();
+
+  window.latestResults = results;
+  $('jsonPreview').innerText = JSON.stringify(results, null, 2);
+  $('info').innerText = 'Done. Found ' + results.segments.length + ' segments.';
+  
+  // Trigger reconstruction automatically
+  renderReconstruction();
+});
+
+function resampleContour(pts, step){
+  let dists = [0];
+  for(let i=1;i<pts.length;i++) dists.push(dists[i-1] + Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
+  let total = dists[dists.length-1];
+  if(total === 0) return pts.slice();
+  let out = [];
+  for(let s=0; s<=total; s+=step){
+    let idx = binarySearch(dists, s);
+    if(idx >= dists.length-1) { out.push(pts[pts.length-1]); break; }
+    let t = (s - dists[idx]) / (dists[idx+1] - dists[idx] + 1e-12);
+    out.push([ pts[idx][0] + t*(pts[idx+1][0]-pts[idx][0]), pts[idx][1] + t*(pts[idx+1][1]-pts[idx][1]) ]);
+  }
+  return out;
+}
+
+function binarySearch(arr, val){
+  let lo=0, hi=arr.length-1;
+  while(lo<hi){
+    let mid = Math.floor((lo+hi)/2);
+    if(arr[mid] <= val) lo = mid+1; else hi = mid;
+  }
+  return Math.max(0, lo-1);
+}
+
+function subpixelRefine(pts, grayMat, radius){
+  if(!cv.Mat.prototype.floatAt){
+    cv.Mat.prototype.floatAt = function(r,c){ return this.data32F ? this.data32F[r*this.cols + c] : this.ucharPtr(r,c)[0]; };
+  }
+  let w = grayMat.cols, h = grayMat.rows, out = [];
+  let gradX = new cv.Mat(), gradY = new cv.Mat();
+  cv.Sobel(grayMat, gradX, cv.CV_32F, 1, 0, 3);
+  cv.Sobel(grayMat, gradY, cv.CV_32F, 0, 1, 3);
+
+  for(let i=0;i<pts.length;i++){
+    let pPrev = pts[Math.max(0, i-2)], pNext = pts[Math.min(pts.length-1, i+2)];
+    let tx = pNext[0] - pPrev[0], ty = pNext[1] - pPrev[1];
+    let len = Math.hypot(tx,ty); if(len === 0){ out.push(pts[i]); continue; }
+    tx /= len; ty /= len;
+    let nx = -ty, ny = tx, best = pts[i], bestVal = -1, bestPos = 0;
+    
+    for(let d=-radius; d<=radius; d++){
+      let sx = pts[i][0] + nx*d, sy = pts[i][1] + ny*d;
+      let ix = Math.round(sx), iy = Math.round(sy);
+      if(ix < 1 || iy < 1 || ix >= w-1 || iy >= h-1) continue;
+      let val = Math.abs(gradX.floatAt(iy, ix)*nx + gradY.floatAt(iy, ix)*ny);
+      if(val > bestVal){ bestVal = val; best = [sx, sy]; bestPos = d; }
+    }
+    
+    if(bestPos > -radius && bestPos < radius){
+      let v = [];
+      for(let dd = bestPos-1; dd<=bestPos+1; dd++){
+        let sx = pts[i][0] + nx*dd, sy = pts[i][1] + ny*dd;
+        let ix = Math.round(sx), iy = Math.round(sy);
+        if(ix < 1 || iy < 1 || ix >= w-1 || iy >= h-1){ v.push(0); continue; }
+        v.push(Math.abs(gradX.floatAt(iy, ix)*nx + gradY.floatAt(iy, ix)*ny));
+      }
+      let denom = (v[0] - 2*v[1] + v[2]);
+      if(Math.abs(denom) > 1e-6){
+        let offset = 0.5*(v[0] - v[2]) / denom;
+        out.push([pts[i][0] + nx*(bestPos + offset), pts[i][1] + ny*(bestPos + offset)]);
+      } else out.push(best);
+    } else out.push(best);
+  }
+  gradX.delete(); gradY.delete();
+  return out;
+}
+
+function computeCurvature(pts){
+  let n = pts.length, k = new Array(n).fill(0);
+  for(let i=1;i<n-1;i++){
+    let dx1 = pts[i][0] - pts[i-1][0], dy1 = pts[i][1] - pts[i-1][1];
+    let dx2 = pts[i+1][0] - pts[i][0], dy2 = pts[i+1][1] - pts[i][1];
+    k[i] = Math.abs(dx1*dy2 - dy1*dx2) / (Math.pow(Math.hypot(dx1,dy1), 3) + 1e-9);
+  }
+  return k;
+}
+
+function smoothArray(arr, window){
+  let n = arr.length, out = new Array(n).fill(0), r = Math.floor(window/2);
+  for(let i=0;i<n;i++){
+    let s=0,c=0;
+    for(let j=Math.max(0,i-r); j<=Math.min(n-1,i+r); j++){ s+=arr[j]; c++; }
+    out[i] = s / Math.max(1,c);
+  }
+  return out;
+}
+
+function splitByCurvatureAdaptive(pts, kSmooth, sens){
+  let n = pts.length, candidates = new Set([0, n-1]);
+  let mean = kSmooth.reduce((a,b)=>a+b,0)/n;
+  let std = Math.sqrt(kSmooth.reduce((a,b)=>a+(b-mean)*(b-mean),0)/n);
+  let peakThresh = mean + sens * std;
+  
+  for(let i=2;i<n-2;i++){
+    if(kSmooth[i]*kSmooth[i+1] < 0) candidates.add(i);
+    if(kSmooth[i] > kSmooth[i-1] && kSmooth[i] > kSmooth[i+1] && kSmooth[i] > peakThresh) candidates.add(i);
+  }
+  
+  let candArr = Array.from(candidates).sort((a,b)=>a-b), segs = [];
+  for(let s=0; s<candArr.length-1; s++){
+    let a = candArr[s], b = candArr[s+1];
+    if(b - a < 4) continue;
+    let seg = []; for(let j=a; j<=b; j++) seg.push(pts[j]);
+    segs.push(seg);
+  }
+  return segs;
+}
+
+function fitParametricPolynomial(pts, degree){
+  let n = pts.length, t = [0];
+  for(let i=1;i<n;i++) t.push(t[i-1] + Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
+  let total = t[t.length-1] || 1;
+  for(let i=0;i<n;i++) t[i] = t[i]/total;
+
+  let d = degree, A = new Array(n);
+  for(let i=0;i<n;i++){
+    A[i] = new Array(d+1); let val = 1;
+    for(let j=0;j<=d;j++){ A[i][j] = val; val *= t[i]; }
+  }
+  let AT = transpose(A), ATA = multiply(AT, A);
+  for(let i=0;i<ATA.length;i++) ATA[i][i] += 1e-6; // lambda
+  let ATbX = multiplyVec(AT, pts.map(p=>p[0])), ATbY = multiplyVec(AT, pts.map(p=>p[1]));
+  
+  let coeffsX = solveLinearSystem(ATA, ATbX), coeffsY = solveLinearSystem(ATA, ATbY);
+  return {
+    coeffsX: coeffsX, coeffsY: coeffsY,
+    eval: function(tt){
+      let x=0,y=0, pow=1;
+      for(let i=0;i<coeffsX.length;i++){ x += coeffsX[i]*pow; y += coeffsY[i]*pow; pow *= tt; }
+      return [x,y];
+    }
+  };
+}
+
+function transpose(M){ let r=M.length, c=M[0].length; let T = Array.from({length:c}, ()=>new Array(r)); for(let i=0;i<r;i++) for(let j=0;j<c;j++) T[j][i]=M[i][j]; return T; }
+function multiply(A,B){
+  let m=A.length, p=A[0].length, n=B[0].length; let C = Array.from({length:m}, ()=>new Array(n).fill(0));
+  for(let i=0;i<m;i++) for(let k=0;k<p;k++) for(let j=0;j<n;j++) C[i][j] += A[i][k]*B[k][j];
+  return C;
+}
+function multiplyVec(A, v){
+  let m=A.length, n=A[0].length; let out = new Array(m).fill(0);
+  for(let i=0;i<m;i++) for(let j=0;j<n;j++) out[i] += A[i][j]*v[j];
+  return out;
+}
+function solveLinearSystem(A, b){
+  let n = A.length, M = new Array(n); 
+  for(let i=0;i<n;i++){ M[i] = A[i].slice(); M[i].push(b[i]); }
+  for(let i=0;i<n;i++){
+    let maxRow = i; for(let k=i+1;k<n;k++) if(Math.abs(M[k][i]) > Math.abs(M[maxRow][i])) maxRow = k;
+    if(Math.abs(M[maxRow][i]) < 1e-12) continue;
+    [M[i], M[maxRow]] = [M[maxRow], M[i]];
+    let piv = M[i][i]; for(let j=i;j<=n;j++) M[i][j] /= piv;
+    for(let r=0;r<n;r++) if(r!==i){ let factor = M[r][i]; for(let c=i;c<=n;c++) M[r][c] -= factor * M[i][c]; }
+  }
+  let x = new Array(n).fill(0); for(let i=0;i<n;i++) x[i] = M[i][n];
+  return x;
+}
+
+function arcLengthSamples(pts){
+  let s = [0]; for(let i=1;i<pts.length;i++) s.push(s[i-1] + Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
+  let total = s[s.length-1] || 1, samples = [];
+  for(let i=0;i<pts.length;i++) samples.push({ t: s[i]/total, x: pts[i][0], y: pts[i][1] });
+  return samples;
+}
+
+function drawFittedCurve(fit, pts, color, width, ctxTar){
+  let n = pts.length, t = [0];
+  for(let i=1;i<n;i++) t.push(t[i-1] + Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
+  let total = t[t.length-1] || 1;
+  ctxTar.strokeStyle = color; ctxTar.lineWidth = width; ctxTar.beginPath();
+  let steps = Math.max(30, Math.floor(n*4));
+  for(let i=0;i<=steps;i++){
+    let p = fit.eval(i/steps);
+    if(i===0) ctxTar.moveTo(p[0], p[1]); else ctxTar.lineTo(p[0], p[1]);
+  }
+  ctxTar.stroke();
+}
+
+function annotatePoint(pt, text, ctxTar){
+  ctxTar.fillStyle = '#111'; ctxTar.font = '14px sans-serif'; 
+  ctxTar.fillText('S'+text, pt[0]+6, pt[1]-6);
+}
+
+/* =========================
+   Reconstruction & Rendering
+   ========================= */
+function evalPoly(coeffs, t){
+  let v = 0, p = 1;
+  for(let i=0;i<coeffs.length;i++){ v += coeffs[i]*p; p *= t; }
+  return v;
+}
+
+function sampleSegment(seg, samples){
+  let pts = [];
+  for(let i=0;i<=samples;i++){
+    let t = i / samples;
+    pts.push([evalPoly(seg.coeffsX, t), evalPoly(seg.coeffsY, t)]);
+  }
+  return pts;
+}
+
+function dist(a,b){ return Math.hypot(a[0]-b[0], a[1]-b[1]); }
+
+function orderSegmentsByEndpoints(allPolylines){
+  let unused = allPolylines.slice(), chains = [];
+  while(unused.length){
+    let cur = unused.shift();
+    let chain = { pts: cur.pts.slice(), ids: [cur.id] };
+    let extended = true;
+    while(extended){
+      extended = false;
+      let end = chain.pts[chain.pts.length-1];
+      let bestIdx = -1, bestDist = Infinity, bestFlip=false;
+      for(let i=0;i<unused.length;i++){
+        let p = unused[i].pts;
+        let d1 = dist(end, p[0]), d2 = dist(end, p[p.length-1]);
+        if(d1 < bestDist){ bestDist = d1; bestIdx = i; bestFlip = false; }
+        if(d2 < bestDist){ bestDist = d2; bestIdx = i; bestFlip = true; }
+      }
+      if(bestIdx >= 0 && bestDist < 40){ 
+        let chosen = unused.splice(bestIdx,1)[0];
+        if(bestFlip) chosen.pts.reverse();
+        if(dist(chain.pts[chain.pts.length-1], chosen.pts[0]) > 1){
+          chain.pts.push([(chain.pts[chain.pts.length-1][0] + chosen.pts[0][0])/2, (chain.pts[chain.pts.length-1][1] + chosen.pts[0][1])/2]);
+        }
+        chain.pts = chain.pts.concat(chosen.pts);
+        chain.ids.push(chosen.id);
+        extended = true;
+      }
+    }
+    chains.push(chain);
+  }
+  return chains;
+}
+
+function closeIfPossible(chain){ return dist(chain.pts[0], chain.pts[chain.pts.length-1]) < 30; }
+
+function drawPolyline(pts, color, width){
+  if(pts.length===0) return;
+  oc.strokeStyle = color; oc.lineWidth = width; oc.beginPath();
+  oc.moveTo(pts[0][0], pts[0][1]);
+  for(let i=1;i<pts.length;i++) oc.lineTo(pts[i][0], pts[i][1]);
+  oc.stroke();
+}
+
+function fillPolygon(pts){
+  if(pts.length<3) return;
+  oc.fillStyle = 'rgba(11, 132, 255, 0.15)'; oc.beginPath();
+  oc.moveTo(pts[0][0], pts[0][1]);
+  for(let i=1;i<pts.length;i++) oc.lineTo(pts[i][0], pts[i][1]);
+  oc.closePath(); oc.fill();
+}
+
+function renderReconstruction(){
+  let data = window.latestResults;
+  oc.clearRect(0,0, outCanvas.width, outCanvas.height);
+  if(!data || !data.segments) return;
+
+  let samples = parseInt($('samples').value) || 200;
+  let width = parseFloat($('strokeW').value) || 2;
+  let doFill = $('doFill').checked;
+  let showIds = $('showIds').checked;
+
+  let allPolylines = data.segments.map(seg => ({ id: seg.id, pts: sampleSegment(seg, samples) }));
+  let chains = orderSegmentsByEndpoints(allPolylines);
+
+  // Colors for visualization
+  const colors = ['#0b84ff', '#e02424', '#059669', '#d97706', '#7c3aed'];
+
+  chains.forEach((chain, index) => {
+    if(doFill && closeIfPossible(chain)) fillPolygon(chain.pts);
+    let color = colors[index % colors.length];
+    drawPolyline(chain.pts, color, width);
+    
+    if(showIds) {
+      chain.ids.forEach(id => {
+        let seg = data.segments.find(s=>s.id === id);
+        if(seg) annotatePoint(sampleSegment(seg, 2)[1], id, oc); // t=0.5
+      });
+    }
+  });
+}
+
+// Bind reconstruction controls
+['samples', 'strokeW', 'doFill', 'showIds'].forEach(id => {
+  $(id).addEventListener('change', renderReconstruction);
+});
+
+/* =========================
+   Equations Generator
+   ========================= */
+function formatPolynomial(coeffs) {
+  let terms = [];
+  for (let i = 0; i < coeffs.length; i++) {
+    let c = coeffs[i];
+    if (Math.abs(c) < 1e-6) continue;
+    
+    let sign = c < 0 ? " - " : (terms.length > 0 ? " + " : "");
+    let val = Math.abs(c).toFixed(4);
+    
+    let tPart = "";
+    if (i === 1) tPart = "t";
+    else if (i > 1) tPart = `t<sup>${i}</sup>`;
+    
+    terms.push(`${sign}${val}${tPart}`);
+  }
+  return terms.length > 0 ? terms.join("") : "0";
+}
+
+$('showEqBtn').addEventListener('click', () => {
+  let data = window.latestResults;
+  let box = $('equationsBox');
+  let content = $('equationsContent');
+  
+  if(!data || !data.segments || data.segments.length === 0) {
+    alert("Run the Curvature Extractor first!");
+    return;
+  }
+  
+  box.style.display = "block";
+  content.innerHTML = "";
+  
+  data.segments.forEach(seg => {
+    let div = document.createElement('div');
+    div.className = "eq-segment";
+    div.innerHTML = `
+      <strong>Segment ${seg.id}</strong> 
+      <span style="color:#666; font-size:12px;">(Degree: ${seg.polyDegree}, Points: ${seg.pointsCount})</span>
+      <div class="eq-math">x(t) = ${formatPolynomial(seg.coeffsX)}</div>
+      <div class="eq-math">y(t) = ${formatPolynomial(seg.coeffsY)}</div>
+    `;
+    content.appendChild(div);
+  });
+});
+
+/* =========================
+   Exports
+   ========================= */
+$('exportJsonBtn').addEventListener('click', ()=>{
+  if(!window.latestResults){ alert('No results to export.'); return; }
+  let blob = new Blob([JSON.stringify(window.latestResults, null, 2)], {type:'application/json'});
+  let link = document.createElement('a'); link.href = URL.createObjectURL(blob);
+  link.download = 'curves.json'; link.click();
+});
+
+$('exportPngBtn').addEventListener('click', ()=>{
+  if(!window.latestResults){ alert('No reconstruction to export.'); return; }
+  let link = document.createElement('a'); link.download = 'reconstructed_curves.png';
+  link.href = outCanvas.toDataURL('image/png'); link.click();
+});
+
+</script>
+</body>
+</html>
